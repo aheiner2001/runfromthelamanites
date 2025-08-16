@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neon Runner 3D</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            overflow: hidden;
+            font-family: 'Courier New', monospace;
+            background: #000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+
+        #gameCanvas {
+            border: 2px solid #00ffff;
+            box-shadow: 0 0 50px #00ffff, inset 0 0 50px rgba(0, 255, 255, 0.1);
+        }
+
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: #00ffff;
+            font-size: 24px;
+            text-shadow: 0 0 20px #00ffff;
+            z-index: 10;
+        }
+
+        #gameOver {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            color: #ff00ff;
+            display: none;
+            z-index: 10;
+        }
+
+        #gameOver h2 {
+            font-size: 48px;
+            margin-bottom: 20px;
+            text-shadow: 0 0 30px #ff00ff;
+            animation: pulse 1s infinite;
+        }
+
+        #gameOver button {
+            font-size: 20px;
+            padding: 10px 30px;
+            background: linear-gradient(45deg, #00ffff, #ff00ff);
+            border: none;
+            color: #000;
+            font-weight: bold;
+            cursor: pointer;
+            border-radius: 5px;
+            transition: all 0.3s;
+        }
+
+        #gameOver button:hover {
+            transform: scale(1.1);
+            box-shadow: 0 0 30px #ff00ff;
+        }
+
+        #instructions {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: #00ffff;
+            text-align: center;
+            z-index: 10;
+            font-size: 16px;
+            text-shadow: 0 0 10px #00ffff;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+    </style>
+</head>
+<body>
+    <div id="ui">
+        <div>Score: <span id="score">0</span></div>
+        <div>High Score: <span id="highScore">0</span></div>
+    </div>
+    
+    <div id="gameOver">
+        <h2>GAME OVER</h2>
+        <p style="font-size: 24px; margin-bottom: 20px;">Score: <span id="finalScore">0</span></p>
+        <button onclick="resetGame()">PLAY AGAIN</button>
+    </div>
+    
+    <div id="instructions">
+        Use A/D or ←/→ to move | SPACE to jump
+    </div>
+    <audio id="bgMusic" src="song1.mp3" autoplay loop></audio>
+
+    <canvas id="gameCanvas"></canvas>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        window.addEventListener('DOMContentLoaded', () => {
+    const bgMusic = document.getElementById('bgMusic');
+    if (bgMusic) {
+        bgMusic.play().catch(() => {
+            // If autoplay is blocked, play on first user interaction
+            const resumeAudio = () => {
+                bgMusic.play();
+                window.removeEventListener('click', resumeAudio);
+                window.removeEventListener('keydown', resumeAudio);
+            };
+            window.addEventListener('click', resumeAudio);
+            window.addEventListener('keydown', resumeAudio);
+        });
+    }
+});
+        // Game variables
+        let scene, camera, renderer;
+        let player, ground;
+        let obstacles = [];
+        let particles = [];
+        let score = 0;
+        let highScore = 0;
+        let gameSpeed = 0.3;
+        let isJumping = false;
+        let jumpVelocity = 0;
+        let isGameOver = false;
+        let lanePosition = 0; // -1, 0, 1 for left, center, right
+        let targetLaneX = 0;
+        
+        // Constants
+        const LANE_WIDTH = 3;
+        const JUMP_FORCE = 0.7;
+        const GRAVITY = 0.03;
+        const OBSTACLE_SPACING = 5;
+        
+        // Input handling
+        const keys = {};
+        
+        function init() {
+            // Setup Three.js
+            scene = new THREE.Scene();
+            scene.fog = new THREE.Fog(0x000000, 10, 100);
+            
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 5, 10);
+       
+            
+            renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('gameCanvas'), antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            
+            // Lighting
+            const ambientLight = new THREE.AmbientLight(0x404040);
+            scene.add(ambientLight);
+            
+            const directionalLight = new THREE.DirectionalLight(0x00ffff, 1);
+            directionalLight.position.set(5, 10, 5);
+            directionalLight.castShadow = true;
+            directionalLight.shadow.camera.left = -20;
+            directionalLight.shadow.camera.right = 20;
+            directionalLight.shadow.camera.top = 20;
+            directionalLight.shadow.camera.bottom = -20;
+            scene.add(directionalLight);
+
+            const directionalLight2 = new THREE.DirectionalLight(0x00ffff, 1);
+            directionalLight2.position.set(-5, 10, 5);
+            directionalLight2.castShadow = true;
+            scene.add(directionalLight2);
+                        
+            // const directionalLight2 = new THREE.DirectionalLight(0x00ffff, 1);
+            // directionalLight2.position.set(5, 10, 5);
+            // scene.add(directionalLight2);
+            
+            // Create player
+            // const playerGeometry = new THREE.BoxGeometry(1, 10, 1);
+            // const playerMaterial = new THREE.MeshPhongMaterial({
+            //     color: 0x00ffff,
+            //     emissive: 0x00ffff,
+            //     emissiveIntensity: 0.5,
+            //     shininess: 20
+            // });
+
+            const texture = new THREE.TextureLoader().load('img.png');
+
+// create a flat plane and apply the texture
+            const playerGeometry = new THREE.PlaneGeometry(2, 3); // width, height
+            const playerMaterial = new THREE.MeshBasicMaterial({
+            map: texture,
+            transparent: true // allows PNG transparency
+            });
+            player = new THREE.Mesh(playerGeometry, playerMaterial);
+            player.position.y = 2;
+            player.castShadow = true;
+            player.receiveShadow = true;
+            scene.add(player);
+            
+            // Create ground with grid
+            // const groundGeometry = new THREE.PlaneGeometry(0, 200);
+            // const groundMaterial = new THREE.MeshPhongMaterial({
+            //     color: 0x111111,
+            //     emissive: 0x001122,
+            //     emissiveIntensity: 0.2
+            // });
+            // ground = new THREE.Mesh(groundGeometry, groundMaterial);
+            // ground.rotation.x = -Math.PI / 2;
+            // ground.position.y = -0.5;
+            // ground.receiveShadow = true;
+            // scene.add(ground);
+
+            // Load grass texture
+            const textuwre = new THREE.TextureLoader().load('grass.jpg');
+
+            // Make it tile across the ground
+            textuwre.wrapS = THREE.RepeatWrapping;
+            textuwre.wrapT = THREE.RepeatWrapping;
+            textuwre.repeat.set(20, 20); // adjust how many times it repeats
+
+            // Create ground material with texture
+            const groundMaterial = new THREE.MeshPhongMaterial({
+                map: textuwre,
+                side: THREE.DoubleSide
+            });
+
+            // Create plane geometry for ground
+            const groundGeometry = new THREE.PlaneGeometry(200, 200); // 200x200 units
+            ground = new THREE.Mesh(groundGeometry, groundMaterial);
+            ground.rotation.x = -Math.PI / 2; // lay flat
+            ground.position.y = -0.5;
+            ground.receiveShadow = true;
+            scene.add(ground);
+
+            
+            // Add grid lines
+            // const gridHelper = new THREE.GridHelper(200, 50, 0x00ffff, 0x004444);
+            // gridHelper.position.y = -0.45;
+            // scene.add(gridHelper);
+            
+            // Create side walls with neon effect
+            const wallGeometry = new THREE.PlaneGeometry(200, 20);
+            const wallMaterial = new THREE.MeshPhongMaterial({
+                color:0x87CEEB,
+                emissive: 0x0000ff,
+                emissiveIntensity: 0.1,
+                side: THREE.DoubleSide
+            });
+            
+            const leftWall = new THREE.Mesh(wallGeometry, wallMaterial);
+            leftWall.rotation.y = Math.PI / 2;
+            leftWall.position.x = -10;
+            leftWall.position.y = 10;
+            scene.add(leftWall);
+            
+            const rightWall = new THREE.Mesh(wallGeometry, wallMaterial);
+            rightWall.rotation.y = -Math.PI / 2;
+            rightWall.position.x = 10;
+            rightWall.position.y = 10;
+            scene.add(rightWall);
+            
+            // Initialize obstacles
+            createInitialObstacles();
+            
+            // Load high score
+            highScore = localStorage.getItem('neonRunnerHighScore') || 0;
+            document.getElementById('highScore').textContent = highScore;
+        }
+        
+        function createInitialObstacles() {
+            for (let i = 0; i < 10; i++) {
+                createObstacle(-30 - i * OBSTACLE_SPACING);
+            }
+        }
+        
+       function createObstacle(zPosition) {
+    const lane = Math.floor(Math.random() * 5) - 2; // -1, 0, or 1
+
+    // Load the Lamanite texture (make sure the PNG is in your project folder)
+    const textureLoader = new THREE.TextureLoader();
+    const texture = textureLoader.load("lamanite.png"); // your sprite file
+
+    // Create a material using the PNG with transparency
+    const material = new THREE.MeshBasicMaterial({
+        map: texture,
+        transparent: true,
+        side: THREE.DoubleSide 
+    });
+
+    // Use a flat plane for the sprite
+    const geometry = new THREE.PlaneGeometry(3, 5); // adjust size to fit your scene
+    const obstacle = new THREE.Mesh(geometry, material);
+
+    // Positioning
+    obstacle.position.x = lane * LANE_WIDTH;
+    obstacle.position.y = geometry.parameters.height / 2; // same as before
+    obstacle.position.z = zPosition;
+
+    // Make sure it faces the camera
+   const flip = Math.random() < 0.5 ? 0 : Math.PI;
+    obstacle.rotation.y = flip;
+    obstacle.userData.type = "lamanite";
+
+    scene.add(obstacle);
+    obstacles.push(obstacle);
+}
+
+        
+        function createParticle(x, y, z) {
+            const particleGeometry = new THREE.BoxGeometry(0.2, 0.2, 0.2);
+            const particleMaterial = new THREE.MeshPhongMaterial({
+                color: Math.random() > 0.5 ? 0x00ffff : 0xff00ff,
+                emissive: Math.random() > 0.5 ? 0x00ffff : 0xff00ff,
+                emissiveIntensity: 0.8
+            });
+            
+            const particle = new THREE.Mesh(particleGeometry, particleMaterial);
+            particle.position.set(x, y, z);
+            particle.velocity = {
+                x: (Math.random() - 0.5) * 0.3,
+                y: Math.random() * 0.3 + 0.1,
+                z: (Math.random() - 0.5) * 0.3
+            };
+            particle.life = 1.0;
+            
+            scene.add(particle);
+            particles.push(particle);
+        }
+        
+
+
+        // PLAYER
+        function updatePlayer() {
+            // Handle lane switching
+            if (keys['ArrowLeft'] || keys['a'] || keys['A']) {
+                if (lanePosition > -2) {
+                    lanePosition--;
+                    targetLaneX = lanePosition * LANE_WIDTH;
+                }
+                keys['ArrowLeft'] = false;
+                keys['a'] = false;
+                keys['A'] = false;
+            }
+            
+            if (keys['ArrowRight'] || keys['d'] || keys['D']) {
+                if (lanePosition < 2) {
+                    lanePosition++;
+                    targetLaneX = lanePosition * LANE_WIDTH;
+                }
+                keys['ArrowRight'] = false;
+                keys['d'] = false;
+                keys['D'] = false;
+            }
+            
+            // Smooth lane movement
+            player.position.x += (targetLaneX - player.position.x) * 0.2;
+            
+            // Handle jumping
+            if ((keys[' '] || keys['ArrowUp']) && !isJumping) {
+                isJumping = true;
+                jumpVelocity = JUMP_FORCE;
+            }
+            
+            if (isJumping) {
+                player.position.y += jumpVelocity;
+                jumpVelocity -= GRAVITY;
+                
+                if (player.position.y <= 2) {
+                    player.position.y = 2;
+                    isJumping = false;
+                    jumpVelocity = 0;
+                    
+                    // Create landing particles
+                    for (let i = 0; i < 5; i++) {
+                        createParticle(player.position.x, 0, player.position.z);
+                    }
+                }
+            }
+            
+            // Rotate player while moving
+            player.rotation.y = -player.position.x * 0.1;
+            player.rotation.z = Math.sin(Date.now() * 0.003) * 0.05;
+        }
+        
+        function updateObstacles() {
+            // Move obstacles
+            for (let i = obstacles.length - 1; i >= 0; i--) {
+                const obstacle = obstacles[i];
+                obstacle.position.z += gameSpeed;
+                // obstacle.rotation.y = 0.02;
+                // obstacle.rotation.x += 0.01;
+                
+                // Check collision
+                const distance = Math.sqrt(
+                    Math.pow(player.position.x - obstacle.position.x, 2) +
+                    Math.pow(player.position.y - obstacle.position.y, 2) +
+                    Math.pow(player.position.z - obstacle.position.z, 2)
+                );
+                
+                if (distance < 1.5) {
+                    gameOver();
+                }
+                
+                // Remove passed obstacles and create new ones
+                if (obstacle.position.z > 15) {
+                    scene.remove(obstacle);
+                    obstacles.splice(i, 1);
+                    score += 10;
+                    document.getElementById('score').textContent = score;
+                    
+                    // Create new obstacle
+                    const lastObstacle = obstacles[obstacles.length - 1];
+                    createObstacle(lastObstacle.position.z - OBSTACLE_SPACING);
+                    
+                    // Increase speed
+                    gameSpeed = Math.min(0.8, 0.3 + score * 0.0002);
+                }
+            }
+        }
+        
+        function updateParticles() {
+            for (let i = particles.length - 1; i >= 0; i--) {
+                const particle = particles[i];
+                particle.position.x += particle.velocity.x;
+                particle.position.y += particle.velocity.y;
+                particle.position.z += particle.velocity.z;
+                particle.velocity.y -= 0.01;
+                particle.life -= 0.02;
+                particle.material.opacity = particle.life;
+                particle.rotation.x += 0.1;
+                particle.rotation.y += 0.1;
+                
+                if (particle.life <= 0) {
+                    scene.remove(particle);
+                    particles.splice(i, 1);
+                }
+            }
+        }
+        
+        function gameOver() {
+            isGameOver = true;
+            document.getElementById('gameOver').style.display = 'block';
+            document.getElementById('finalScore').textContent = score;
+            
+            if (score > highScore) {
+                highScore = score;
+                localStorage.setItem('neonRunnerHighScore', highScore);
+                document.getElementById('highScore').textContent = highScore;
+            }
+            
+            // Create explosion effect
+            for (let i = 0; i < 20; i++) {
+                createParticle(player.position.x, player.position.y, player.position.z);
+            }
+        }
+        
+        function resetGame() {
+            // Clear obstacles
+            obstacles.forEach(obstacle => scene.remove(obstacle));
+            obstacles = [];
+            
+            // Clear particles
+            particles.forEach(particle => scene.remove(particle));
+            particles = [];
+            
+            // Reset variables
+            score = 0;
+            gameSpeed = 0.3;
+            isJumping = false;
+            jumpVelocity = 0;
+            isGameOver = false;
+            lanePosition = 0;
+            targetLaneX = 0;
+            
+            // Reset player position
+            player.position.set(0, 2, 0);
+            
+            // Reset UI
+            document.getElementById('score').textContent = score;
+            document.getElementById('gameOver').style.display = 'none';
+            
+            // Create new obstacles
+            createInitialObstacles();
+        }
+        
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            if (!isGameOver) {
+                updatePlayer();
+                updateObstacles();
+                updateParticles();
+                
+                // Add subtle camera shake
+                camera.position.x = Math.sin(Date.now() * 0.002) * .1;
+                camera.position.y = 5 + Math.sin(Date.now() * 0.003) *.1 ;
+            }
+            
+            renderer.render(scene, camera);
+        }
+        
+        // Event listeners
+        window.addEventListener('keydown', (e) => {
+            keys[e.key] = true;
+        });
+        
+        window.addEventListener('keyup', (e) => {
+            keys[e.key] = false;
+        });
+        
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+        
+        // Start game
+        init();
+        animate();
+    </script>
+</body>
+</html>
